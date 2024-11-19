@@ -7,13 +7,15 @@ import struct
 import json
 import threading
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QFileDialog, QScrollArea, QSizePolicy
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 
 class UDPReceiver(QWidget):
     def __init__(self):
         super().__init__()
         self.config = []  # Ensure config is initialized before initUI
         self.data_labels = []  # Store data labels for displaying received data
+        self.packet_count = 0
+        self.frequency_label = QLabel('Frequency: 0 Hz')
         self.initUI()
         self.sock = None
         self.receiving = False  # Flag to control receiving thread
@@ -73,8 +75,14 @@ class UDPReceiver(QWidget):
         config_layout.addWidget(self.load_button)
         layout.addLayout(config_layout)
 
+        layout.addWidget(self.frequency_label)
+
         self.setLayout(layout)
         self.setAttribute(Qt.WA_DeleteOnClose)  # Ensure close event is triggered
+
+        self.frequency_timer = QTimer(self)
+        self.frequency_timer.timeout.connect(self.update_frequency)
+        self.frequency_timer.start(1000)  # Update frequency every second
 
     def closeEvent(self, event):
         self.stop_receiving()
@@ -111,6 +119,7 @@ class UDPReceiver(QWidget):
             data_label.setText('')
         
         self.receiving = True
+        self.packet_count = 0
         self.receive_thread = threading.Thread(target=self.receive_data, args=(buffer_size,))
         self.receive_thread.start()
 
@@ -125,6 +134,7 @@ class UDPReceiver(QWidget):
         while self.receiving:
             try:
                 data, _ = self.sock.recvfrom(buffer_size)
+                self.packet_count += 1
                 self.process_data(data)
             except socket.timeout:
                 continue
@@ -185,6 +195,10 @@ class UDPReceiver(QWidget):
                     self.config[-1][0].setText(item['label'])
                     self.config[-1][1].setText(item['type'])
                     self.config[-1][2].setText(item['offset'])
+
+    def update_frequency(self):
+        self.frequency_label.setText(f'Frequency: {self.packet_count} Hz')
+        self.packet_count = 0
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
