@@ -7,7 +7,7 @@ import struct
 import json
 import threading
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QFileDialog, QScrollArea, QSizePolicy
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, QEvent
 
 class UDPReceiver(QWidget):
     def __init__(self):
@@ -19,6 +19,8 @@ class UDPReceiver(QWidget):
         self.initUI()
         self.sock = None
         self.receiving = False  # Flag to control receiving thread
+        self.was_receiving = False  # Track if receiving was active before losing focus
+        self.receive_thread = None  # Initialize receive_thread to None
 
     def initUI(self):
         self.setWindowTitle('UDP Data Viewer')
@@ -84,6 +86,16 @@ class UDPReceiver(QWidget):
         self.frequency_timer.timeout.connect(self.update_frequency)
         self.frequency_timer.start(1000)  # Update frequency every second
 
+        self.installEventFilter(self)
+
+    def eventFilter(self, source, event):
+        if event.type() == QEvent.WindowDeactivate:
+            self.was_receiving = self.receiving
+            # Do not stop receiving when losing focus
+        elif event.type() == QEvent.WindowActivate and self.was_receiving:
+            self.start_receiving()
+        return super().eventFilter(source, event)
+
     def closeEvent(self, event):
         self.stop_receiving()
         event.accept()
@@ -110,6 +122,11 @@ class UDPReceiver(QWidget):
         ip = self.ip_edit.text()
         port = int(self.port_edit.text())
         buffer_size = int(self.buffer_edit.text())
+        
+        # Ensure the socket is closed before creating a new one
+        if self.sock:
+            self.sock.close()
+        
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind((ip, port))
         self.sock.settimeout(1.0)
@@ -120,12 +137,12 @@ class UDPReceiver(QWidget):
         
         self.receiving = True
         self.packet_count = 0
-        self.receive_thread = threading.Thread(target=self.receive_data, args=(buffer_size,))
+        self.receive_thread = threading.Thread(target=self.receive_data, args=(buffer_size,), daemon=True)
         self.receive_thread.start()
 
     def stop_receiving(self):
         self.receiving = False
-        if self.receive_thread.is_alive():
+        if self.receive_thread and self.receive_thread.is_alive():
             self.receive_thread.join()
         if self.sock:
             self.sock.close()
@@ -143,24 +160,56 @@ class UDPReceiver(QWidget):
         for label_edit, type_edit, offset_edit, data_label in self.config:
             label = label_edit.text()
             data_type = type_edit.text()
-            offset = int(offset_edit.text())
-            if data_type == 'float':
-                value = struct.unpack_from('f', data, offset)[0]
-            elif data_type == 'int':
-                value = struct.unpack_from('i', data, offset)[0]
-            elif data_type == 'uint_8':
-                value = struct.unpack_from('B', data, offset)[0]
-            elif data_type.startswith('bit'):
-                bit_index = int(data_type.split('_')[1])
-                byte_value = struct.unpack_from('B', data, offset)[0]
-                value = (byte_value >> bit_index) & 1
-            elif data_type == 'uint_16':
-                value = struct.unpack_from('H', data, offset)[0]
-            elif data_type == 'uint_32':
-                value = struct.unpack_from('I', data, offset)[0]
-            else:
-                value = 'Unknown Type'
+            offset_text = offset_edit.text()
+            if not offset_text.isdigit():
+                data_label.setText(f'{label}: Error: Invalid offset')
+                continue
+            offset = int(offset_text)
+            try:
+                if data_type == 'float':
+                    value = struct.unpack_from('f', data, offset)[0]
+                elif data_type == 'int':
+                    value = struct.unpack_from('i', data, offset)[0]
+                elif data_type == 'uint_8':
+                    value = struct.unpack_from('B', data, offset)[0]
+                elif data_type == 'int_8':
+                    value = struct.unpack_from('b', data, offset)[0]
+                elif data_type == 'uint_16':
+                    value = struct.unpack_from('H', data, offset)[0]
+                elif data_type == 'int_16':
+                    value = struct.unpack_from('h', data, offset)[0]
+                elif data_type == 'uint_32':
+                    value = struct.unpack_from('I', data, offset)[0]
+                elif data_type == 'int_32':
+                    value = struct.unpack_from('i', data, offset)[0]
+                elif data_type == 'uint_64':
+                    value = struct.unpack_from('Q', data, offset)[0]
+                elif data_type == 'int_64':
+                    value = struct.unpack_from('q', data, offset)[0]
+                elif data_type == 'double':
+                    value = struct.unpack_from('d', data, offset)[0]
+                elif data_type == 'char':
+                    value = struct.unpack_from('c', data, offset)[0].decode('utf-8')
+                elif data_type == 'string':
+                    end = data.find(b'\x00', offset)
+                    value = data[offset:end].decode('utf-8')
+                elif data_type == 'bool':
+                    value = struct.unpack_from('?', data, offset)[0]
+                elif data_type.startswith('bit_'):
+                    bit_index = int(data_type.split('_')[1])
+                    byte_value = struct.unpack_from('B', data, offset)[0]
+                    value = (byte_value >> bit_index) & 1
+                elif data_type == 'bcd':
+                    byte_value = struct.unpack_from('B', data, offset)[0]
+                    value = (byte_value >> 4) * 10 + (byte_value & 0xF)
+                elif data_type == 'timestamp':
+                    value = struct.unpack_from('I', data, offset)[0]
+                else:
+                    value = 'Unknown Type'
+            except Exception as e:
+                value = f'Error: {e}'
             data_label.setText(f'{label}: {value}')
+
             
     def save_config(self):
         options = QFileDialog.Options()
