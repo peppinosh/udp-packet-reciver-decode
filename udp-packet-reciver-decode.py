@@ -30,6 +30,7 @@ class UDPReceiver(QWidget):
         self.plot_data = {}  # Store data for plotting
         self.plot_button.clicked.connect(self.plot_data_real_time)
         self.ok = False
+        self.status_check = False
         self.checkbox_state = {}  # Dictionary to store checkbox states
         self.start_button.setCheckable(True)
         self.stop_button.setCheckable(True)
@@ -205,7 +206,7 @@ class UDPReceiver(QWidget):
                 self.checkbox_state[label_edit.text()] = (state == Qt.Checked)
             if active_checkbox.isChecked():
                 any_checked = True
-        self.ok = any_checked  # Set self.ok based on whether any checkbox is checked
+        self.status_check = any_checked  # Set self.ok based on whether any checkbox is checked
 
     def start_receiving(self):
         ip = self.ip_edit.text()
@@ -369,28 +370,31 @@ class UDPReceiver(QWidget):
 
     def plot_data_real_time(self):
         if hasattr(self, 'ani') and self.ani is not None:
-          plt.close('all')  # Close any existing plots
+            plt.close('all')  # Close any existing plots
         self.plot_data = {}
         self.ani = None
-        lines = {}
         
         '''se non ci sono checkbox ceccate non posso fare il plot'''
-        if not self.ok:
+        if not self.status_check:
             print("Nessun dato selezionato per il plot.")
             return
+
         fig, ax = plt.subplots()
         lines = {}  # Dizionario per memorizzare le linee del grafico
 
         # Inizializza le linee per ciascun dato da plottare
-        for label in self.plot_data:
-            line, = ax.plot([], [], label=label)
-            lines[label] = line
+        for label_edit, _, _, active_checkbox, _ in self.config:
+            label = label_edit.text()
+            if active_checkbox.isChecked():
+                self.plot_data[label] = deque(maxlen=1000)
+                line, = ax.plot([], [], label=label)
+                lines[label] = line
 
         ax.legend()
         ax.set_title("Dati in Tempo Reale da UDP")
         ax.set_xlabel("Campioni")
         ax.set_ylabel("Valore")
-        ax.set_xlim(0, 1000)  # Limite iniziale
+        
 
         if self.fix_y_checkbox.isChecked():
             min_y = float(self.min_y_edit.text())
@@ -416,7 +420,8 @@ class UDPReceiver(QWidget):
                 if all_data:
                     ax.set_xlim(0, max(len(data) for data in self.plot_data.values()))
                     ax.set_ylim(min(all_data), max(all_data))
-
+                    
+            ax.set_xlim(0, max(len(data) for data in self.plot_data.values()))
             return lines.values()
 
         def on_close(event):
@@ -429,10 +434,14 @@ class UDPReceiver(QWidget):
         self.ani = animation.FuncAnimation(fig, update, interval=interval, blit=False, cache_frame_data=False)
         plt.show()
 
-
         
 if __name__ == '__main__':
-    app = QApplication(sys.argv)
+    app = QApplication.instance()  # Check if an instance of the application is already running
+    if app is None:
+        app = QApplication(sys.argv)
     ex = UDPReceiver()
     ex.show()
-    sys.exit(app.exec_())
+    if not app.instance():
+        sys.exit(app.exec_())
+    else:
+        app.exec_()
